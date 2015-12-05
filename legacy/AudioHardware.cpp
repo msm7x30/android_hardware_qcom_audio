@@ -45,7 +45,6 @@ extern "C" {
 #define AAC_DEVICE_IN "/dev/msm_aac_in"
 #define FM_DEVICE  "/dev/msm_fm"
 
-#define FM_A2DP_REC 1
 #define FM_FILE_REC 2
 
 namespace android_audio_legacy {
@@ -171,7 +170,6 @@ PCM_REC,
 VOICE_CALL,
 FM_RADIO,
 FM_REC,
-FM_A2DP,
 INVALID_STREAM
 };
 
@@ -1280,8 +1278,7 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input, uint32_t outputDe
         // Recording will happen through currently active tx device
         if((inputDevice == AUDIO_DEVICE_IN_VOICE_CALL)
 #ifdef QCOM_FM_ENABLED
-           || (inputDevice == AUDIO_DEVICE_IN_FM_RX)
-           || (inputDevice == AUDIO_DEVICE_IN_FM_RX_A2DP)
+           || (inputDevice == AUDIO_DEVICE_IN_FM_TUNER)
 #endif
           )
             return NO_ERROR;
@@ -1492,10 +1489,8 @@ status_t AudioHardware::disableFM()
            ALOGE("msm_route_stream failed");
            return 0;
     }
-    if(!getNodeByStreamType(FM_A2DP)){
-        if(enableDevice(DEVICE_FMRADIO_STEREO_TX, 0)) {
-            ALOGE("Disabling device failed for device %d", DEVICE_FMRADIO_STEREO_TX);
-        }
+    if(enableDevice(DEVICE_FMRADIO_STEREO_TX, 0)) {
+        ALOGE("Disabling device failed for device %d", DEVICE_FMRADIO_STEREO_TX);
     }
     deleteFromTable(FM_RADIO);
     updateDeviceInfo(cur_rx, cur_tx);
@@ -1891,62 +1886,6 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
     }
     status_t status =0;
     struct msm_voicerec_mode voc_rec_cfg;
-#ifdef QCOM_FM_ENABLED
-    if(devices == AUDIO_DEVICE_IN_FM_RX_A2DP) {
-        status = ::open("/dev/msm_a2dp_in", O_RDONLY);
-        if (status < 0) {
-            ALOGE("Cannot open /dev/msm_a2dp_in errno: %d", errno);
-            goto Error;
-        }
-        mFd = status;
-        // configuration
-        ALOGV("get config");
-        struct msm_audio_config config;
-        status = ioctl(mFd, AUDIO_GET_CONFIG, &config);
-        if (status < 0) {
-            ALOGE("Cannot read config");
-            goto Error;
-        }
-
-        ALOGV("set config");
-        config.channel_count = AudioSystem::popCount((*pChannels) & (AUDIO_CHANNEL_IN_STEREO | AUDIO_CHANNEL_IN_MONO));
-        config.sample_rate = *pRate;
-        config.buffer_size = bufferSize();
-        config.buffer_count = 2;
-        config.type = CODEC_TYPE_PCM;
-        status = ioctl(mFd, AUDIO_SET_CONFIG, &config);
-        if (status < 0) {
-            ALOGE("Cannot set config");
-            if (ioctl(mFd, AUDIO_GET_CONFIG, &config) == 0) {
-                if (config.channel_count == 1) {
-                    *pChannels = AUDIO_CHANNEL_IN_MONO;
-                } else {
-                    *pChannels = AUDIO_CHANNEL_IN_STEREO;
-                }
-                *pRate = config.sample_rate;
-            }
-            goto Error;
-        }
-
-        ALOGV("confirm config");
-        status = ioctl(mFd, AUDIO_GET_CONFIG, &config);
-        if (status < 0) {
-            ALOGE("Cannot read config");
-            goto Error;
-        }
-        ALOGV("buffer_size: %u", config.buffer_size);
-        ALOGV("buffer_count: %u", config.buffer_count);
-        ALOGV("channel_count: %u", config.channel_count);
-        ALOGV("sample_rate: %u", config.sample_rate);
-
-        mDevices = devices;
-        mFormat = AUDIO_HW_IN_FORMAT;
-        mChannels = *pChannels;
-        mSampleRate = config.sample_rate;
-        mBufferSize = config.buffer_size;
-    }
-    else
-#endif
     if(*pFormat == AUDIO_HW_IN_FORMAT)
     {
         // open audio input device
@@ -2153,7 +2092,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
             return -1;
         }
 #ifdef QCOM_FM_ENABLED
-        if((mDevices == AUDIO_DEVICE_IN_FM_RX) || (mDevices == AUDIO_DEVICE_IN_FM_RX_A2DP) ){
+        if(mDevices == AUDIO_DEVICE_IN_FM_TUNER) {
             if(ioctl(mFd, AUDIO_GET_SESSION_ID, &dec_id)) {
                 ALOGE("AUDIO_GET_SESSION_ID failed*********");
                 hw->mLock.unlock();
@@ -2172,14 +2111,8 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
                 return -1;
             }
             mFirstread = false;
-            if (mDevices == AUDIO_DEVICE_IN_FM_RX_A2DP) {
-                addToTable(dec_id,cur_tx,INVALID_DEVICE,FM_A2DP,true);
-                mFmRec = FM_A2DP_REC;
-            }
-            else {
-                addToTable(dec_id,cur_tx,INVALID_DEVICE,FM_REC,true);
-                mFmRec = FM_FILE_REC;
-            }
+            addToTable(dec_id,cur_tx,INVALID_DEVICE,FM_REC,true);
+            mFmRec = FM_FILE_REC;
             hw->mLock.unlock();
         }
         else
@@ -2315,20 +2248,6 @@ status_t AudioHardware::AudioStreamInMSM72xx::standby()
         }
         //mHardware->checkMicMute();
         mState = AUDIO_INPUT_CLOSED;
-    }
-    if (mFmRec == FM_A2DP_REC) {
-        //A2DP Recording
-        temp = getNodeByStreamType(FM_A2DP);
-        if(temp == NULL)
-            return NO_ERROR;
-        if(msm_route_stream(PCM_PLAY, temp->dec_id, DEV_ID(DEVICE_FMRADIO_STEREO_TX), 0)) {
-           ALOGE("msm_route_stream failed");
-           return 0;
-        }
-        deleteFromTable(FM_A2DP);
-        if(enableDevice(DEVICE_FMRADIO_STEREO_TX, 0)) {
-            ALOGE("Disabling device failed for device %d", DEVICE_FMRADIO_STEREO_TX);
-        }
     }
     if (mFmRec == FM_FILE_REC) {
         //FM Recording
