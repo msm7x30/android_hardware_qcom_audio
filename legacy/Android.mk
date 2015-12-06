@@ -40,15 +40,9 @@ LOCAL_SHARED_LIBRARIES := \
     libmedia        \
     libaudioalsa
 
-$(shell mkdir -p $(OUT)/obj/SHARED_LIBRARIES/libaudioalsa_intermediates/)
-$(shell touch $(OUT)/obj/SHARED_LIBRARIES/libaudioalsa_intermediates/export_includes)
-
 ifeq ($(BOARD_USES_QCOM_AUDIO_CALIBRATION),true)
     LOCAL_SHARED_LIBRARIES += libaudcal
     LOCAL_CFLAGS += -DWITH_QCOM_CALIBRATION
-
-    $(shell mkdir -p $(OUT)/obj/SHARED_LIBRARIES/libaudcal_intermediates/)
-    $(shell touch $(OUT)/obj/SHARED_LIBRARIES/libaudcal_intermediates/export_includes)
 endif
 
 ifneq ($(TARGET_SIMULATOR),true)
